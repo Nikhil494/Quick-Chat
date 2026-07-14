@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const url = "https://quick-chat-app-rql3.onrender.com";
+export const url = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
 export const axiosInstance = axios.create({
     headers: {
