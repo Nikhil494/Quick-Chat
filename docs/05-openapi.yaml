@@ -1,0 +1,567 @@
+openapi: 3.0.3
+info:
+  title: Quick Chat API
+  description: |
+    REST API for Quick Chat (Express + MongoDB).
+
+    Real-time features (typing, live message fan-out, presence) use **Socket.IO**
+    on the same host and are documented in `docs/04-sequence-diagrams.md` —
+    they are **not** HTTP endpoints.
+
+    Auth: JWT Bearer token from `POST /api/auth/login` (`expiresIn: 1d`).
+    Protected routes expect header `Authorization: Bearer <token>`.
+    Middleware sets `userId` from the token (merged into request body).
+  version: 1.0.0
+  contact:
+    name: Quick Chat
+
+servers:
+  - url: https://quick-chat-server-7crx.onrender.com
+    description: Render production
+  - url: http://localhost:5000
+    description: Local development
+
+tags:
+  - name: Auth
+    description: Public signup and login
+  - name: Users
+    description: Current user, directory, profile picture
+  - name: Chats
+    description: Create and list chats; clear unread
+  - name: Messages
+    description: Persist and fetch messages
+
+paths:
+  /api/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      operationId: signup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+            example:
+              firstname: Ada
+              lastname: Lovelace
+              email: ada@example.com
+              password: secret123
+      responses:
+        '201':
+          description: User created (no JWT returned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimpleSuccessResponse'
+              example:
+                message: User created successfully!
+                success: true
+        '200':
+          description: Business failure or error (API often still returns 200)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                alreadyExists:
+                  value:
+                    message: User already exists.
+                    success: false
+
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login and receive JWT
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: ada@example.com
+              password: secret123
+      responses:
+        '200':
+          description: Login result
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LoginSuccessResponse'
+                  - $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                success:
+                  value:
+                    message: user logged-in successfully
+                    success: true
+                    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                invalidUser:
+                  value:
+                    message: User does not exist
+                    success: false
+                invalidPassword:
+                  value:
+                    message: invalid password
+                    success: false
+
+  /api/user/get-logged-user:
+    get:
+      tags: [Users]
+      summary: Get the authenticated user
+      operationId: getLoggedUser
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Current user document
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDataResponse'
+        '400':
+          description: Request failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/user/get-all-users:
+    get:
+      tags: [Users]
+      summary: List all users except the caller
+      operationId: getAllUsers
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Array of users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '400':
+          description: Request failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/user/upload-profile-pic:
+    post:
+      tags: [Users]
+      summary: Upload profile picture to Cloudinary and save URL
+      operationId: uploadProfilePic
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadProfilePicRequest'
+      responses:
+        '200':
+          description: Updated user with profilePic URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDataResponse'
+
+  /api/chat/create-new-chat:
+    post:
+      tags: [Chats]
+      summary: Create a chat between members
+      operationId: createNewChat
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateChatRequest'
+            example:
+              members:
+                - 64f0a1b2c3d4e5f678901234
+                - 64f0a1b2c3d4e5f678901235
+      responses:
+        '201':
+          description: Chat created (members populated)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatDataResponse'
+        '400':
+          description: Create failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/chat/get-all-chats:
+    get:
+      tags: [Chats]
+      summary: Get chats for the authenticated user
+      description: |
+        Returns chats where `members` contains the JWT `userId`,
+        populated with `members` and `lastMessage`, sorted by `updatedAt` descending.
+      operationId: getAllChats
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Chat list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatListResponse'
+        '400':
+          description: Fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/chat/clear-unread-message:
+    post:
+      tags: [Chats]
+      summary: Clear unread count and mark messages read
+      operationId: clearUnreadMessage
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClearUnreadRequest'
+      responses:
+        '200':
+          description: Unread cleared; returns updated chat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatDataResponse'
+
+  /api/message/new-message:
+    post:
+      tags: [Messages]
+      summary: Persist a new message and update chat metadata
+      description: |
+        Saves the message, sets chat `lastMessage`, and increments
+        `unreadMessageCount` by 1. Real-time delivery is done separately via Socket.IO `send-message`.
+      operationId: createMessage
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewMessageRequest'
+      responses:
+        '201':
+          description: Message saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageDataResponse'
+        '400':
+          description: Send failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/message/get-all-messages/{chatId}:
+    get:
+      tags: [Messages]
+      summary: Get all messages for a chat (full history)
+      operationId: getAllMessages
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: chatId
+          in: path
+          required: true
+          schema:
+            type: string
+            description: MongoDB ObjectId of the chat
+      responses:
+        '200':
+          description: Messages sorted by createdAt ascending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageListResponse'
+        '400':
+          description: Fetch failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT from login. Payload claims include `userId`.
+
+  schemas:
+    SignupRequest:
+      type: object
+      required: [firstname, lastname, email, password]
+      properties:
+        firstname:
+          type: string
+        lastname:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LoginSuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+        token:
+          type: string
+          description: JWT to send as Bearer token
+
+    SimpleSuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+
+    User:
+      type: object
+      description: |
+        Mongoose user document. Note - current implementation may return
+        the password hash in responses; clients should not display it.
+      properties:
+        _id:
+          type: string
+        firstname:
+          type: string
+        lastname:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+          description: bcrypt hash (should be omitted in future versions)
+        profilePic:
+          type: string
+          nullable: true
+          description: Cloudinary HTTPS URL
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    UserDataResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/User'
+
+    UserListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+
+    UploadProfilePicRequest:
+      type: object
+      required: [image]
+      properties:
+        image:
+          type: string
+          description: Base64 data URL or raw image string accepted by Cloudinary uploader
+
+    CreateChatRequest:
+      type: object
+      required: [members]
+      properties:
+        members:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: string
+          description: Two user ObjectIds for a 1-1 chat
+
+    ClearUnreadRequest:
+      type: object
+      required: [chatId]
+      properties:
+        chatId:
+          type: string
+
+    Chat:
+      type: object
+      properties:
+        _id:
+          type: string
+        members:
+          type: array
+          items:
+            oneOf:
+              - type: string
+              - $ref: '#/components/schemas/User'
+          description: ObjectIds or populated User objects
+        lastMessage:
+          description: ObjectId or populated Message
+          oneOf:
+            - type: string
+            - $ref: '#/components/schemas/Message'
+            - type: 'null'
+        unreadMessageCount:
+          type: integer
+          minimum: 0
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ChatDataResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/Chat'
+
+    ChatListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Chat'
+
+    NewMessageRequest:
+      type: object
+      required: [chatId, sender]
+      properties:
+        chatId:
+          type: string
+        sender:
+          type: string
+          description: Sender user ObjectId
+        text:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+          description: Optional image data URL / string stored on the message
+
+    Message:
+      type: object
+      properties:
+        _id:
+          type: string
+        chatId:
+          type: string
+        sender:
+          type: string
+        text:
+          type: string
+          nullable: true
+        image:
+          type: string
+          nullable: true
+        read:
+          type: boolean
+          default: false
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    MessageDataResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/Message'
+
+    MessageListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Message'
+
+# Default security for documentation tools; public auth routes override with security: []
+security:
+  - BearerAuth: []
